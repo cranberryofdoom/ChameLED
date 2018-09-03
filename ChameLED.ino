@@ -1,31 +1,19 @@
-
+#include <Adafruit_NeoPixel.h>
 #include "FastLED.h"
 #include <Wire.h>
 #include "Adafruit_TCS34725.h"
-#include "Adafruit_Pixie.h"
-#include "SoftwareSerial.h"
 
 #define SELECTOR_PIN 10
-#define LED_PIN   6
-#define PIXIE_PIN  9
-#define NUM_PIXELS 3
+#define SKIRT_LED_PIN   6
+#define TOP_LED_PIN 9
 #define LED_TYPE    WS2812B
 #define COLOR_ORDER GRB
-#define NUM_LEDS    60       // Change this to reflect the number of LEDs you have
+#define NUM_TOP_LEDS    8       // Change this to reflect the number of LEDs you have
+#define NUM_SKIRT_LEDS    60       // Change this to reflect the number of LEDs you have
 #define BRIGHTNESS  255      // Set brightness here
-#define UPDATES_PER_SECOND 100
 
-SoftwareSerial pixieSerial(-1, PIXIE_PIN);
-Adafruit_Pixie strip = Adafruit_Pixie(NUM_PIXELS, &pixieSerial);
 
-CRGB leds[NUM_LEDS];
-
-/* Example code for the Adafruit TCS34725 breakout library */
-
-/* Connect SCL    to analog 5
-   Connect SDA    to analog 4
-   Connect VDD    to 3.3V DC
-   Connect GROUND to common ground */
+CRGB leds[NUM_SKIRT_LEDS];
    
 /* Initialise with default values (int time = 2.4ms, gain = 1x) */
 // Adafruit_TCS34725 tcs = Adafruit_TCS34725();
@@ -33,22 +21,32 @@ CRGB leds[NUM_LEDS];
 /* Initialise with specific int time and gain values */
 Adafruit_TCS34725 tcs = Adafruit_TCS34725(TCS34725_INTEGRATIONTIME_700MS, TCS34725_GAIN_1X);
 
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_TOP_LEDS, TOP_LED_PIN, NEO_GRB + NEO_KHZ800);
+
 
 // our RGB -> eye-recognized gamma color
 byte gammatable[256];
+uint16_t prevMaxRGB[] = {255, 255, 255};
+uint16_t maxRGB[] = {255, 255, 255};
 
 void setup(void) {
   Serial.begin(9600);
   
+  strip.begin();
+  strip.setBrightness(BRIGHTNESS);
   // tell FastLED about the LED strip configuration
-  FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS)
+  FastLED.addLeds<LED_TYPE, SKIRT_LED_PIN, COLOR_ORDER>(leds, NUM_SKIRT_LEDS)
     .setCorrection(TypicalLEDStrip) // cpt-city palettes have different color balance
     .setDither(BRIGHTNESS < 255);
   FastLED.setBrightness(BRIGHTNESS);
-  
-  pixieSerial.begin(115200);
-  strip.setBrightness(BRIGHTNESS);  // Adjust as necessary to avoid blinding
-  
+
+  if (tcs.begin()) {
+    Serial.println("Found sensor");
+  } else {
+    Serial.println("No TCS34725 found ... check your connections");
+    while (1); // halt!
+  }
+    
   pinMode(SELECTOR_PIN, INPUT_PULLUP);
   
   tcs.setInterrupt(true);
@@ -61,29 +59,28 @@ void setup(void) {
     x *= 255;
     gammatable[i] = x;      
   }
+  pushColorToLEDsWithDelay(10);
 }
-
-uint16_t humanRed;
-uint16_t humanGreen;
-uint16_t humanBlue;
-boolean isSensorLEDOff = true;
 
 void loop(void) {
   uint16_t r, g, b, c, colorTemp, lux;
+
+//  printColors();
   
   tcs.setInterrupt(true);
 
   int thumbInput = digitalRead(SELECTOR_PIN);
+  if (thumbInput == 1) {  
+    breatheLEDs();
+  }
   if (thumbInput == 0) {
-    Serial.println("true");
     tcs.setInterrupt(false);
+    delay(60);
     tcs.getRawData(&r, &g, &b, &c);
     colorTemp = tcs.calculateColorTemperature(r, g, b);
     lux = tcs.calculateLux(r, g, b);
 
-    uint32_t sum = r;
-    sum += g;
-    sum += b;
+    uint32_t sum = r; sum += g; sum += b;
   
     float red, green, blue;
   
@@ -91,33 +88,65 @@ void loop(void) {
     green = g; green /= sum;
     blue = b; blue /= sum;
     red *= 256; green *= 256; blue *= 256;
+
+    uint16_t humanRed, humanGreen, humanBlue;
   
   // Apparently the gammatable version results in better color
     humanRed = (uint16_t)gammatable[(int)red];
     humanGreen = (uint16_t)gammatable[(int)green];
     humanBlue = (uint16_t)gammatable[(int)blue];
-  
-    int pixelRed = (int)gammatable[(int)red];
-    int pixelGreen = (int)gammatable[(int)green];
-    int pixelBlue = (int)gammatable[(int)blue];
-  
-  //  Gammatable works better because it gives a higher
-  //  variety of color
-  //  humanRed = (int)red;
-  //  humanGreen = (int)green;
-  //  humanBlue = (int)blue;
-  
-  //  Serial.println(pixelRed);
-  //  Serial.println(pixelGreen);
-  //  Serial.println(pixelBlue);
-  //
-  //  strip.setPixelColor(0, 255, 255, 255);
-  //  strip.show();
-  //  delay(10);
-  //  
-    for(uint8_t i = 0 ; i < NUM_LEDS; i++) {
-      leds[i] = CRGB(humanRed, humanGreen, humanBlue);
+
+    float multiplier = 256/humanRed;
+
+    if (humanGreen > humanRed) {
+      multiplier = 256/humanGreen;
+    } else if (humanBlue > humanGreen) {
+      multiplier = 256/humanBlue;
     }
+  
+    float maxRed = humanRed * multiplier;
+    float maxGreen = humanGreen * multiplier;
+    float maxBlue = humanBlue * multiplier;
+
+    if (maxRGB[0] != maxRed || maxRGB[1] != maxGreen || maxRGB[2] != maxBlue) {
+      prevMaxRGB[0] = maxRGB[0];
+      prevMaxRGB[1] = maxRGB[1];
+      prevMaxRGB[2] = maxRGB[2];
+      maxRGB[0] = maxRed;
+      maxRGB[1] = maxGreen;
+      maxRGB[2] = maxBlue;
+      pushColorToLEDsWithDelay(10);
+    } 
+  }
+}
+
+void breatheLEDs() {
+  for(uint8_t i = 0 ; i < NUM_SKIRT_LEDS; i++) {
+    float breath = (exp(sin(millis()/2000.0*PI)) - 0.36787944)*108.0;
+    FastLED.setBrightness(breath);
     FastLED.show();
   }
 }
+
+void pushColorToLEDsWithDelay(int delayMs) {
+  for(uint8_t i = 0 ; i < NUM_TOP_LEDS; i++) {
+    strip.setPixelColor(i, maxRGB[0], maxRGB[1], maxRGB[2]);
+    strip.show();
+  }
+  FastLED.setBrightness(BRIGHTNESS);
+  for(uint8_t i = 0 ; i < NUM_SKIRT_LEDS; i++) {
+    leds[i] = CRGB(maxRGB[0], maxRGB[1], maxRGB[2]);
+    FastLED.show();
+    delay(delayMs);
+  }
+}
+
+void printColors() {
+  Serial.print(maxRGB[0]);
+  Serial.print(" ");
+  Serial.print(maxRGB[1]);
+  Serial.print(" ");
+  Serial.print(maxRGB[2]);
+  Serial.println(" ");
+}
+
