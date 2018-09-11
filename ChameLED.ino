@@ -59,7 +59,7 @@ void setup(void) {
     x *= 255;
     gammatable[i] = x;      
   }
-  pushColorToLEDsWithDelay(10);
+  pushColorToLEDsWithDelay(5);
 }
 
 void loop(void) {
@@ -75,11 +75,11 @@ void loop(void) {
   }
   if (thumbInput == 0) {
     tcs.setInterrupt(false);
-    delay(60);
     tcs.getRawData(&r, &g, &b, &c);
+    tcs.setInterrupt(true);
     colorTemp = tcs.calculateColorTemperature(r, g, b);
     lux = tcs.calculateLux(r, g, b);
-
+    
     uint32_t sum = r; sum += g; sum += b;
   
     float red, green, blue;
@@ -115,7 +115,7 @@ void loop(void) {
       maxRGB[0] = maxRed;
       maxRGB[1] = maxGreen;
       maxRGB[2] = maxBlue;
-      pushColorToLEDsWithDelay(10);
+      pushColorToLEDsWithDelay(5);
     } 
   }
 }
